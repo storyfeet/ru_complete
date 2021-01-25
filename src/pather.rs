@@ -1,3 +1,5 @@
+use std::path::Path;
+
 pub enum Complete {
     One(String),
     Many(Vec<String>),

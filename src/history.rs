@@ -178,7 +178,7 @@ fn date_to_history_path(t: SystemTime) -> PathBuf {
     let (y, m) = year_month(t);
     on_year_month(&res, y, m)
 }
-fn history_path() -> PathBuf {
+pub fn history_path() -> PathBuf {
     let mut tdir = PathBuf::from(std::env::var("HOME").unwrap_or(String::new()));
     tdir.push(".config/rushell/history");
     tdir
