@@ -491,6 +491,7 @@ dependencies = [
  "hyper",
  "serde",
  "serde_derive",
+ "str_tools",
  "tokio",
  "tokio-stream",
  "toml",
@@ -551,6 +552,10 @@ dependencies = [
  "libc",
  "winapi",
 ]
+
+[[package]]
+name = "str_tools"
+version = "0.1.0"
 
 [[package]]
 name = "syn"

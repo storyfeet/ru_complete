@@ -1,4 +1,3 @@
-use crate::str_util;
 use chrono::*;
 use serde_derive::*;
 use std::cmp::Ordering;
@@ -7,6 +6,7 @@ use std::io::{Read, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use str_tools::traits::*;
 
 pub enum Complete {
     One(String),
@@ -36,7 +36,7 @@ pub fn all_strs_agree<I: Iterator<Item = S>, S: AsRef<str>>(
     let res = it.next()?.as_ref().to_string();
     let mut max = res.len();
     for v in it {
-        max = str_util::str_agree(&res[..max], v.as_ref());
+        max = str_tools::str_chars::str_agree(&res[..max], v.as_ref());
         if max <= min_len {
             return None;
         }
@@ -90,8 +90,8 @@ impl HistoryStore {
         }
     }
 
-    pub fn load_history(&mut self) {
-        load_history(2, &mut self.mp);
+    pub async fn load_history(&mut self, path: &Path) {
+        load_history(path, 2, &mut self.mp);
     }
 
     pub fn push_command(&mut self, cmd: String) -> anyhow::Result<()> {
@@ -166,7 +166,9 @@ impl HistoryStore {
         }
         //Get exclude str with next char.
         let mut cend = cmd.to_string();
-        let ec = crate::ui::del_char(&mut cend).and_then(|c| std::char::from_u32((c as u32) + 1));
+        let ec = cend
+            .del_char()
+            .and_then(|c| std::char::from_u32((c as u32) + 1));
         match ec {
             Some(c) => cend.push(c),
             None => return Vec::new(),
@@ -289,17 +291,16 @@ impl HistorySaver {
     }
 }
 
-pub fn load_history(months: u32, mp: &mut BTreeMap<String, HistoryItem>) {
+pub fn load_history(path: &Path, months: u32, mp: &mut BTreeMap<String, HistoryItem>) {
     let (y, m) = year_month(SystemTime::now());
-    let path = history_path();
 
     for n in 1..=months {
         let sub = months - n;
         let y2 = y - (sub as i32 / 12);
         let m2 = ((m + 11 - sub as u32) % 12) + 1;
-        let p2 = on_year_month(&path, y2, m2);
+        let p2 = on_year_month(path, y2, m2);
 
-        if let Err(e) = load_history_file(on_year_month(&path, y2, m2), mp) {
+        if let Err(e) = load_history_file(on_year_month(path, y2, m2), mp) {
             println!(
                 "Could not load History file : '{}' because '{}'",
                 p2.display(),

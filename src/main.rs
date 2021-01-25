@@ -4,7 +4,6 @@ use hyper::{Body, Request, Response, Server};
 //use std::convert::Infallible;
 use std::net::SocketAddr;
 mod manager;
-mod str_util;
 mod tab_complete;
 
 #[derive(Debug, Clone)]
