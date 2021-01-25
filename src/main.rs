@@ -1,33 +1,53 @@
 //use err_tools::*;
-use hyper::body::{Bytes, HttpBody};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 //use std::convert::Infallible;
 use std::net::SocketAddr;
+mod manager;
+mod str_util;
+mod tab_complete;
+
+#[derive(Debug, Clone)]
+pub struct Completer {
+    mode: &'static str,
+    s: String,
+    pwd: String,
+}
+
+impl Completer {
+    pub fn from_uri(uri: &hyper::Uri) -> anyhow::Result<Self> {
+        let mut res = Completer {
+            mode: "",
+            s: String::new(),
+            pwd: String::new(),
+        };
+        let up = url::Url::parse(&format!("https://a?{}", uri.query().unwrap_or("")))?;
+        for (k, v) in up.query_pairs() {
+            match k.as_ref() {
+                "mode" => match v.as_ref() {
+                    "path" => res.mode = "path",
+                    _ => {}
+                },
+                "s" => res.s = v.to_string(),
+                "pwd" => res.pwd = v.to_string(),
+                _ => {}
+            }
+            println!("k={},v={}", k, v);
+        }
+        Ok(res)
+    }
+}
 
 async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
     println!("Signal recieved");
-    let (parts, mut bod) = req.into_parts();
 
-    let d = match bod.data().await {
-        Some(Ok(d)) => d,
-        Some(Err(e)) => {
-            println!("Error d = {:?}", e);
-            Bytes::from("")
-        }
+    let (parts, _) = req.into_parts();
 
-        None => {
-            println!("Nothing doing");
-            Bytes::from("")
-        }
-    };
+    let completer = Completer::from_uri(&parts.uri)?;
+
     let q = parts.uri.query().unwrap_or("No Query");
 
-    let r = format!(
-        "Hello from '{}' you said: '{}' ",
-        q,
-        std::str::from_utf8(&d.slice(..))?
-    );
+    let r = format!("Hello from '{}' you said: '{:?}' ", q, completer,);
 
     Ok(Response::new(Body::from(r)))
 }
