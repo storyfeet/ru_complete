@@ -1,13 +1,12 @@
-use crate::tab_complete as tc;
+use crate::history;
 use crate::tab_complete::Complete;
 use crate::Completer;
+use async_std::stream::StreamExt;
 use std::path::PathBuf;
 use tokio::sync::mpsc::*;
+use tokio::sync::oneshot;
 
-pub struct RMessage {
-    cp: Completer,
-    rt: Sender<Complete>,
-}
+pub type RMessage = (Completer, oneshot::Sender<Complete>);
 
 #[derive(Clone)]
 pub struct Doer {
@@ -20,7 +19,14 @@ pub fn complete_manager(path: &str) -> Doer {
     Doer { ch_s }
 }
 
-async fn running_manager(p: PathBuf, r: Receiver<RMessage>) {
-    let mut hist = tc::HistoryStore::new();
-    hist.load_history(&p)
+async fn running_manager(p: PathBuf, mut r: Receiver<RMessage>) {
+    let mut hist = history::Store::new();
+    hist.load_history(&p).await;
+    while let Some((cp, reply)) = r.recv().await {
+        match cp.mode {
+            "" => {}
+            "path" => {}
+            _ => {}
+        }
+    }
 }

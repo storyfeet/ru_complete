@@ -3,6 +3,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 //use std::convert::Infallible;
 use std::net::SocketAddr;
+mod history;
 mod manager;
 mod tab_complete;
 
