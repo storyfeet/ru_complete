@@ -30,9 +30,8 @@ impl Store {
         load_history(path, 2, &mut self.mp);
     }
 
-    pub fn push_command(&mut self, cmd: String) -> anyhow::Result<()> {
+    pub fn push_command(&mut self, cmd: String, pwd: String) -> anyhow::Result<()> {
         let time = SystemTime::now();
-        let pwd = std::env::current_dir().unwrap_or(PathBuf::from(""));
         match self.mp.get_mut(&cmd) {
             Some(mut cv) => {
                 if !cv.pwds.contains(&pwd) {
@@ -70,19 +69,18 @@ impl Store {
         Ok(())
     }
 
-    pub fn guess(&mut self, cmd: &str) -> bool {
+    pub fn guess(&mut self, cmd: &str, pwd: &String) -> Vec<String> {
         let mut g = self.cmd_complete(cmd);
         if g.len() == 0 {
-            return false;
+            return Vec::new();
         }
-        let cpwd = std::env::current_dir().unwrap_or(PathBuf::from(""));
         g.sort_by(|(_, a), (_, b)| {
             let mut sca = a.hits;
-            if a.pwds.contains(&cpwd) {
+            if a.pwds.contains(pwd) {
                 sca += 10;
             }
             let mut scb = b.hits;
-            if b.pwds.contains(&cpwd) {
+            if b.pwds.contains(pwd) {
                 scb += 10;
             }
             match a.time.cmp(&b.time) {
@@ -92,8 +90,7 @@ impl Store {
             }
             sca.cmp(&scb)
         });
-        self.guesses = Some(g.into_iter().map(|(a, _)| a.clone()).collect());
-        true
+        g.into_iter().map(|(a, _)| a.clone()).collect()
     }
 
     pub fn cmd_complete<'a>(&'a mut self, cmd: &str) -> Vec<(&'a String, &'a HistoryItem)> {
@@ -150,7 +147,7 @@ impl Store {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryItem {
-    pwds: Vec<PathBuf>,
+    pwds: Vec<String>,
     time: SystemTime,
     hits: usize,
 }
@@ -168,7 +165,7 @@ pub struct LoadArray {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistorySaver {
     cmd: String,
-    pwds: Vec<PathBuf>,
+    pwds: Vec<String>,
     time: SystemTime,
     hits: usize,
 }

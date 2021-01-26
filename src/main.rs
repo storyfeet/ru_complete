@@ -1,6 +1,9 @@
 //use err_tools::*;
+use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn, Service};
 use hyper::{Body, Request, Response, Server};
+use tokio::io::{AsyncRead, AsyncReadExt};
+
 //use std::convert::Infallible;
 use core::task::{Context, Poll};
 use manager::Doer;
@@ -42,24 +45,30 @@ impl Completer {
     }
 }
 
+/*
 pub struct Handle {
     d: Doer,
 }
 
-impl Service<Request<Body>> for Handle {
+impl<'a> Service<&'a AddrStream> for Handle {
     type Response = Response<Body>;
     type Error = anyhow::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, anyhow::Error>> + Send>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), anyhow::Error>> {
         Poll::Ready(Ok(()))
     }
-    fn call(&mut self, req: Request<Body>) -> Self::Future {
-        Box::pin(async { handle(req).await })
+    fn call(&mut self, req: &'a AddrStream) -> Self::Future {
+        Box::pin(async move {
+            let mut inn = req.into_inner();
+            let s = read_stream(&mut inn).await?;
+            println!("Hello {}", s);
+            Ok(Response::new(Body::from(s)))
+        })
     }
 }
-
-async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
+*/
+async fn handle(req: Request<Body>, dr: Doer) -> anyhow::Result<Response<Body>> {
     println!("Signal recieved");
 
     let (parts, _) = req.into_parts();
@@ -68,7 +77,9 @@ async fn handle(req: Request<Body>) -> anyhow::Result<Response<Body>> {
 
     let q = parts.uri.query().unwrap_or("No Query");
 
-    let r = format!("Hello from '{}' you said: '{:?}' ", q, completer,);
+    let cp = dr.complete(completer).await;
+
+    let r = format!("Hello from '{}' you said: '{:?}' ", q, cp);
 
     Ok(Response::new(Body::from(r)))
 }
@@ -78,7 +89,13 @@ async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], 9056));
     let doer = crate::manager::make_manager(&history::history_path());
 
-    let make_service = make_service_fn(|_conn| async { Handle { d: doer.clone() } });
+    let make_service = make_service_fn(move |_conn| {
+        let dr = doer.clone();
+        async move {
+            let d2 = dr.clone();
+            Ok::<_, anyhow::Error>(service_fn(move |req| handle(req, d2.clone())))
+        }
+    });
 
     let server = Server::bind(&addr).serve(make_service);
 
@@ -87,3 +104,17 @@ async fn main() {
         eprintln!("server error: {}", e);
     }
 }
+
+/*async fn read_stream<A: AsyncRead + Unpin>(a: &mut A) -> anyhow::Result<String> {
+    let mut b = [0u8; 20];
+    let mut v = Vec::new();
+    loop {
+        match a.read(&mut b).await {
+            Ok(0) => {
+                return String::from_utf8(v).map_err(|e| e.into());
+            }
+            Ok(n) => v.extend(&b[0..n]),
+            Err(e) => return Err(e.into()),
+        }
+    }
+}*/

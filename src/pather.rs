@@ -1,5 +1,6 @@
 use std::path::Path;
 
+#[derive(Debug)]
 pub enum Complete {
     One(String),
     Many(Vec<String>),

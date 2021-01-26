@@ -12,6 +12,14 @@ pub struct Doer {
     ch_s: Sender<RMessage>,
 }
 
+impl Doer {
+    pub async fn complete(&self, c: Completer) -> Option<Complete> {
+        let (o_s, o_r) = oneshot::channel();
+        self.ch_s.send((c, o_s)).await.ok();
+        o_r.await.ok()
+    }
+}
+
 pub fn make_manager(path: &Path) -> Doer {
     let (ch_s, ch_r) = channel::<RMessage>(10);
     tokio::spawn(running_manager(PathBuf::from(path), ch_r));
@@ -21,6 +29,7 @@ pub fn make_manager(path: &Path) -> Doer {
 async fn running_manager(p: PathBuf, mut r: Receiver<RMessage>) {
     let mut hist = history::Store::new();
     hist.load_history(&p).await;
+    let mut n = 0;
     while let Some((cp, reply)) = r.recv().await {
         println!("message recieved : {:?}", cp);
         match cp.mode {
@@ -28,6 +37,7 @@ async fn running_manager(p: PathBuf, mut r: Receiver<RMessage>) {
             "path" => {}
             _ => {}
         }
-        reply.send(Complete::One("Hello".to_string())).ok();
+        reply.send(Complete::One(format!("Hello {}", n))).ok();
+        n += 1;
     }
 }
