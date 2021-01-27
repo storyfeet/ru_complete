@@ -11,23 +11,17 @@ use str_tools::traits::*;
 #[derive(Clone, Debug)]
 pub struct Store {
     mp: BTreeMap<String, HistoryItem>,
-    recent: Vec<String>,
-    pub guesses: Option<Vec<String>>,
-    pub pos: Option<usize>,
 }
 
 impl Store {
     pub fn new() -> Self {
         Self {
             mp: BTreeMap::new(),
-            recent: Vec::new(),
-            pos: None,
-            guesses: None,
         }
     }
 
     pub async fn load_history(&mut self, path: &Path) {
-        load_history(path, 2, &mut self.mp);
+        load_history(path, 2, &mut self.mp).await;
     }
 
     pub fn push_command(&mut self, cmd: String, pwd: String) -> anyhow::Result<()> {
@@ -52,28 +46,11 @@ impl Store {
             }
         }
 
-        //Unstable self.recent.drain_filter(|i| i != cmd);
-        let mut i = 0;
-        while i < self.recent.len() {
-            if self.recent[i] == cmd {
-                self.recent.remove(i);
-            } else {
-                i += 1;
-            }
-        }
-
-        self.recent.push(cmd);
-        if self.recent.len() > 200 {
-            self.recent.remove(0);
-        }
         Ok(())
     }
 
     pub fn guess(&mut self, cmd: &str, pwd: &String) -> Vec<String> {
         let mut g = self.cmd_complete(cmd);
-        if g.len() == 0 {
-            return Vec::new();
-        }
         g.sort_by(|(_, a), (_, b)| {
             let mut sca = a.hits;
             if a.pwds.contains(pwd) {
@@ -84,8 +61,8 @@ impl Store {
                 scb += 10;
             }
             match a.time.cmp(&b.time) {
-                Ordering::Greater => sca += 10,
-                Ordering::Less => scb += 10,
+                Ordering::Greater => sca += 100,
+                Ordering::Less => scb += 100,
                 _ => {}
             }
             sca.cmp(&scb)
@@ -109,39 +86,6 @@ impl Store {
         self.mp
             .range::<str, _>((Bound::Included(cmd), Bound::Excluded(cend.as_str())))
             .collect()
-    }
-
-    pub fn up_recent(&mut self) -> Option<&String> {
-        match self.pos {
-            Some(n) => self.select_recent(n + 1),
-            None => self.select_recent(0),
-        }
-    }
-
-    pub fn down_recent(&mut self) -> Option<&String> {
-        match self.pos {
-            Some(0) => {
-                self.pos = None;
-                None
-            }
-            Some(n) => self.select_recent(n - 1),
-            None => self.select_recent(0),
-        }
-    }
-
-    pub fn select_recent(&mut self, n: usize) -> Option<&String> {
-        let v = match &self.guesses {
-            Some(g) => g,
-            None => &self.recent,
-        };
-
-        let l = v.len();
-        if n >= l {
-            self.pos = None;
-            return None;
-        }
-        self.pos = Some(n);
-        v.get(l - 1 - n)
     }
 }
 

@@ -1,22 +1,20 @@
 //use err_tools::*;
-use hyper::server::conn::AddrStream;
-use hyper::service::{make_service_fn, service_fn, Service};
+use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::mpsc;
+//use tokio::io::{AsyncRead, AsyncReadExt};
 
 //use std::convert::Infallible;
-use core::task::{Context, Poll};
 use manager::Doer;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
 mod history;
 mod manager;
 mod pather;
 
 #[derive(Debug, Clone)]
 pub struct Completer {
-    mode: &'static str,
+    mode: String,
     s: String,
     pwd: String,
 }
@@ -24,70 +22,64 @@ pub struct Completer {
 impl Completer {
     pub fn from_uri(uri: &hyper::Uri) -> anyhow::Result<Self> {
         let mut res = Completer {
-            mode: "",
+            mode: String::new(),
             s: String::new(),
             pwd: String::new(),
         };
         let up = url::Url::parse(&format!("https://a?{}", uri.query().unwrap_or("")))?;
         for (k, v) in up.query_pairs() {
             match k.as_ref() {
-                "mode" => match v.as_ref() {
-                    "path" => res.mode = "path",
-                    _ => {}
-                },
+                "mode" => res.mode = v.to_string(),
                 "s" => res.s = v.to_string(),
                 "pwd" => res.pwd = v.to_string(),
                 _ => {}
             }
-            println!("k={},v={}", k, v);
         }
         Ok(res)
     }
 }
 
-/*
-pub struct Handle {
-    d: Doer,
-}
-
-impl<'a> Service<&'a AddrStream> for Handle {
-    type Response = Response<Body>;
-    type Error = anyhow::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, anyhow::Error>> + Send>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), anyhow::Error>> {
-        Poll::Ready(Ok(()))
-    }
-    fn call(&mut self, req: &'a AddrStream) -> Self::Future {
-        Box::pin(async move {
-            let mut inn = req.into_inner();
-            let s = read_stream(&mut inn).await?;
-            println!("Hello {}", s);
-            Ok(Response::new(Body::from(s)))
-        })
-    }
-}
-*/
 async fn handle(req: Request<Body>, dr: Doer) -> anyhow::Result<Response<Body>> {
-    println!("Signal recieved");
-
     let (parts, _) = req.into_parts();
 
     let completer = Completer::from_uri(&parts.uri)?;
 
-    let q = parts.uri.query().unwrap_or("No Query");
+    let cp = dr.complete(completer).await.unwrap_or(Vec::new());
 
-    let cp = dr.complete(completer).await;
+    let s = serde_json::to_string(&cp).unwrap_or("[]".to_string());
 
-    let r = format!("Hello from '{}' you said: '{:?}' ", q, cp);
+    Response::builder()
+        .header("Content-Type", "text/json")
+        .body(Body::from(s))
+        .map_err(|e| e.into())
+}
 
-    Ok(Response::new(Body::from(r)))
+async fn signal_handler(k: SignalKind, doer: Doer, s_killer: mpsc::Sender<()>) {
+    let mut stream = match signal(k) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("Could not listen for signal: {}", e);
+            return;
+        }
+    };
+    loop {
+        stream.recv().await;
+        println!("Kill revieved");
+        doer.kill().await;
+        s_killer.send(()).await.ok();
+    }
 }
 
 #[tokio::main]
 async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], 9056));
     let doer = crate::manager::make_manager(&history::history_path());
+    let (kill_s, mut kill_r) = mpsc::channel(1);
+    tokio::spawn(signal_handler(
+        SignalKind::interrupt(),
+        doer.clone(),
+        kill_s.clone(),
+    ));
 
     let make_service = make_service_fn(move |_conn| {
         let dr = doer.clone();
@@ -97,7 +89,11 @@ async fn main() {
         }
     });
 
-    let server = Server::bind(&addr).serve(make_service);
+    let server = Server::bind(&addr)
+        .serve(make_service)
+        .with_graceful_shutdown(async {
+            kill_r.recv().await;
+        });
 
     // And run forever...
     if let Err(e) = server.await {
