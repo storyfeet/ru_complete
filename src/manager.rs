@@ -35,13 +35,13 @@ impl Doer {
     }
 }
 
-pub fn make_manager(path: &Path) -> Doer {
+pub fn make_manager(path: &Path, killer: oneshot::Sender<()>) -> Doer {
     let (ch_s, ch_r) = channel::<RMessage>(10);
-    tokio::spawn(running_manager(PathBuf::from(path), ch_r));
+    tokio::spawn(running_manager(PathBuf::from(path), ch_r, killer));
     Doer { ch_s }
 }
 
-async fn running_manager(p: PathBuf, mut r: Receiver<RMessage>) {
+async fn running_manager(p: PathBuf, mut r: Receiver<RMessage>, killer: oneshot::Sender<()>) {
     let mut hist = history::Store::new();
     hist.load_history(&p).await;
     while let Some((cp, reply)) = r.recv().await {
@@ -54,7 +54,7 @@ async fn running_manager(p: PathBuf, mut r: Receiver<RMessage>) {
             }
             "save" => {
                 hist.push_command(cp.s, cp.pwd).ok();
-                //save
+                println!("HIST Len = {}", hist.len());
                 reply.send(Vec::new()).ok();
             }
             "kill" => {
@@ -65,6 +65,10 @@ async fn running_manager(p: PathBuf, mut r: Receiver<RMessage>) {
             }
         }
     }
+    hist.save_append(history::date_to_history_path(std::time::SystemTime::now()))
+        .await
+        .ok();
     //TODO Save tree
+    killer.send(()).ok();
     println!("Manager Closing");
 }

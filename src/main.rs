@@ -2,7 +2,8 @@
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::mpsc;
+//use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 //use tokio::io::{AsyncRead, AsyncReadExt};
 
 //use std::convert::Infallible;
@@ -54,7 +55,7 @@ async fn handle(req: Request<Body>, dr: Doer) -> anyhow::Result<Response<Body>> 
         .map_err(|e| e.into())
 }
 
-async fn signal_handler(k: SignalKind, doer: Doer, s_killer: mpsc::Sender<()>) {
+async fn signal_handler(k: SignalKind, doer: Doer) {
     let mut stream = match signal(k) {
         Ok(v) => v,
         Err(e) => {
@@ -66,20 +67,15 @@ async fn signal_handler(k: SignalKind, doer: Doer, s_killer: mpsc::Sender<()>) {
         stream.recv().await;
         println!("Kill revieved");
         doer.kill().await;
-        s_killer.send(()).await.ok();
     }
 }
 
 #[tokio::main]
 async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], 9056));
-    let doer = crate::manager::make_manager(&history::history_path());
-    let (kill_s, mut kill_r) = mpsc::channel(1);
-    tokio::spawn(signal_handler(
-        SignalKind::interrupt(),
-        doer.clone(),
-        kill_s.clone(),
-    ));
+    let (kill_s, kill_r) = oneshot::channel();
+    let doer = crate::manager::make_manager(&history::history_path(), kill_s);
+    tokio::spawn(signal_handler(SignalKind::interrupt(), doer.clone()));
 
     let make_service = make_service_fn(move |_conn| {
         let dr = doer.clone();
@@ -92,7 +88,7 @@ async fn main() {
     let server = Server::bind(&addr)
         .serve(make_service)
         .with_graceful_shutdown(async {
-            kill_r.recv().await;
+            kill_r.await.ok();
         });
 
     // And run forever...

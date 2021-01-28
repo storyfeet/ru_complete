@@ -2,11 +2,11 @@ use chrono::*;
 use serde_derive::*;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use str_tools::traits::*;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -19,6 +19,9 @@ impl Store {
             mp: BTreeMap::new(),
         }
     }
+    pub fn len(&self) -> usize {
+        self.mp.len()
+    }
 
     pub async fn load_history(&mut self, path: &Path) {
         load_history(path, 2, &mut self.mp).await;
@@ -27,22 +30,17 @@ impl Store {
     pub fn push_command(&mut self, cmd: String, pwd: String) -> anyhow::Result<()> {
         let time = SystemTime::now();
         match self.mp.get_mut(&cmd) {
-            Some(mut cv) => {
-                if !cv.pwds.contains(&pwd) {
-                    cv.pwds.push(pwd.clone());
-                }
-                cv.time = time;
-                cv.hits += 1;
-                HistorySaver::new(&cmd, &cv).save()?;
+            Some(cv) => {
+                cv.update(time, pwd, true);
             }
             None => {
                 let item = HistoryItem {
                     pwds: vec![pwd],
                     time,
                     hits: 1,
+                    changed: true,
                 };
-                HistorySaver::new(&cmd, &item).save()?;
-                self.mp.insert(cmd.clone(), item);
+                self.mp.insert(cmd, item);
             }
         }
 
@@ -87,6 +85,23 @@ impl Store {
             .range::<str, _>((Bound::Included(cmd), Bound::Excluded(cend.as_str())))
             .collect()
     }
+
+    ///self is mut because when something is saved it loses it's "changed" status
+    pub async fn save_append<P: AsRef<Path>>(&mut self, fname: P) -> anyhow::Result<()> {
+        let mut f = tokio::fs::OpenOptions::new()
+            .write(true)
+            .append(true)
+            .create(true)
+            .open(fname.as_ref())
+            .await?;
+        for (cmd, v) in &mut self.mp {
+            if v.changed {
+                v.write_to(&mut f, cmd).await?;
+                v.changed = false;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,31 +109,81 @@ pub struct HistoryItem {
     pwds: Vec<String>,
     time: SystemTime,
     hits: usize,
+    changed: bool,
+}
+
+impl HistoryItem {
+    fn update(&mut self, time: SystemTime, pwd: String, change: bool) {
+        self.time = time;
+        if !self.pwds.contains(&pwd) {
+            self.pwds.push(pwd);
+        }
+        self.hits += 1;
+        self.changed |= change;
+    }
+
+    pub fn save_arr<'a>(&'a self, cmd: &'a str) -> SaveArray<'a> {
+        SaveArray {
+            item: vec![self.saver(cmd)],
+        }
+    }
+    pub fn saver<'a>(&'a self, cmd: &'a str) -> HistorySaver<'a> {
+        HistorySaver {
+            cmd,
+            pwds: self.pwds.clone(),
+            time: self
+                .time
+                .duration_since(UNIX_EPOCH)
+                .map(|a| a.as_secs())
+                .unwrap_or(0),
+            hits: self.hits,
+        }
+    }
+
+    pub async fn write_to<W: AsyncWrite + Unpin>(
+        &self,
+        w: &mut W,
+        cmd: &str,
+    ) -> anyhow::Result<()> {
+        let sc = self.save_arr(cmd);
+        let tv = toml::Value::try_from(&sc)?;
+        let s = toml::to_string(&tv)?;
+        w.write_all(s.as_bytes()).await.map_err(|e| e.into())
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HistorySaver<'a> {
+    cmd: &'a str,
+    pwds: Vec<String>,
+    time: u64,
+    hits: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct SaveArray<'a> {
-    item: Vec<&'a HistorySaver>,
+    item: Vec<HistorySaver<'a>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct LoadArray {
-    item: Vec<HistorySaver>,
+    item: Vec<HistoryLoader>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct HistorySaver {
+#[derive(Clone, Debug, Deserialize)]
+pub struct HistoryLoader {
     cmd: String,
     pwds: Vec<String>,
-    time: SystemTime,
+    time: u64,
     hits: usize,
 }
 
-fn date_to_history_path(t: SystemTime) -> PathBuf {
+pub fn date_to_history_path(t: SystemTime) -> PathBuf {
     let res = history_path();
     let (y, m) = year_month(t);
     on_year_month(&res, y, m)
 }
+
 pub fn history_path() -> PathBuf {
     let mut tdir = PathBuf::from(std::env::var("HOME").unwrap_or(String::new()));
     tdir.push(".config/rushell/history");
@@ -126,46 +191,13 @@ pub fn history_path() -> PathBuf {
 }
 
 fn on_year_month(p: &Path, y: i32, m: u32) -> PathBuf {
-    let dt_s = format!("history_{}_{}.toml", y, m);
+    let dt_s = format!("s_history_{}_{}.toml", y, m);
     p.join(&dt_s)
 }
 
 fn year_month(t: SystemTime) -> (i32, u32) {
     let dt: DateTime<offset::Local> = DateTime::from(t);
     (dt.year(), dt.month())
-}
-
-impl HistorySaver {
-    pub fn new(cmd: &str, item: &HistoryItem) -> Self {
-        HistorySaver {
-            cmd: cmd.to_string(),
-            pwds: item.pwds.clone(),
-            time: item.time,
-            hits: item.hits,
-        }
-    }
-
-    //Currently just append to file and hope for the best.
-    pub fn save(&self) -> anyhow::Result<()> {
-        let a = SaveArray { item: vec![self] };
-
-        let tdir = date_to_history_path(self.time);
-        if let Some(par) = tdir.parent() {
-            std::fs::create_dir_all(par)?;
-        }
-
-        let tv = toml::Value::try_from(&a)?;
-        let s = toml::to_string(&tv)?;
-
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .write(true)
-            .open(&tdir)?;
-        write!(f, "{}", &s)?;
-
-        Ok(())
-    }
 }
 
 pub async fn load_history(path: &Path, months: u32, mp: &mut BTreeMap<String, HistoryItem>) {
@@ -199,10 +231,10 @@ pub async fn load_history_file<P: AsRef<Path>>(
             HistoryItem {
                 pwds: i.pwds,
                 hits: i.hits,
-                time: i.time,
+                time: UNIX_EPOCH + Duration::from_secs(i.time),
+                changed: false,
             },
         );
     }
-
     Ok(())
 }
