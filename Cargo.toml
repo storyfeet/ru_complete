@@ -4,6 +4,15 @@ version = "0.1.0"
 authors = ["storyfeet <thebeaky@psmail.net>"]
 edition = "2018"
 
+[lib]
+name="ru_complete"
+path="src/lib.rs"
+
+[[bin]]
+name="ru_server"
+path="src/main.rs"
+
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
