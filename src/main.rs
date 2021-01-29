@@ -76,6 +76,7 @@ async fn main() {
     let (kill_s, kill_r) = oneshot::channel();
     let doer = crate::manager::make_manager(&history::history_path(), kill_s);
     tokio::spawn(signal_handler(SignalKind::interrupt(), doer.clone()));
+    tokio::spawn(signal_handler(SignalKind::terminate(), doer.clone()));
 
     let make_service = make_service_fn(move |_conn| {
         let dr = doer.clone();

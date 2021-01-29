@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use str_tools::traits::*;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -36,7 +36,7 @@ impl Store {
             None => {
                 let item = HistoryItem {
                     pwds: vec![pwd],
-                    time,
+                    time: time_as_u64(time),
                     hits: 1,
                     changed: true,
                 };
@@ -107,14 +107,14 @@ impl Store {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryItem {
     pwds: Vec<String>,
-    time: SystemTime,
+    time: u64,
     hits: usize,
     changed: bool,
 }
 
 impl HistoryItem {
     fn update(&mut self, time: SystemTime, pwd: String, change: bool) {
-        self.time = time;
+        self.time = time_as_u64(time);
         if !self.pwds.contains(&pwd) {
             self.pwds.push(pwd);
         }
@@ -131,11 +131,7 @@ impl HistoryItem {
         HistorySaver {
             cmd,
             pwds: self.pwds.clone(),
-            time: self
-                .time
-                .duration_since(UNIX_EPOCH)
-                .map(|a| a.as_secs())
-                .unwrap_or(0),
+            time: self.time,
             hits: self.hits,
         }
     }
@@ -231,10 +227,16 @@ pub async fn load_history_file<P: AsRef<Path>>(
             HistoryItem {
                 pwds: i.pwds,
                 hits: i.hits,
-                time: UNIX_EPOCH + Duration::from_secs(i.time),
+                time: i.time,
                 changed: false,
             },
         );
     }
     Ok(())
+}
+
+pub fn time_as_u64(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH)
+        .map(|a| a.as_secs())
+        .unwrap_or(0)
 }
